@@ -83,13 +83,13 @@ def main(epub_folder):
             with zipfile.ZipFile(epub_path, 'r') as z:
                 opf_path = find_opf_path(z)
                 if opf_path is None:
-                    print(f"{epub_path.name}: skipped (no OPF found)")
+                    print(f'{epub_path.name.removesuffix(".epub")}: skipped (no OPF found)')
                     skip_count += 1
                     continue
                 manifest, opf_dir, root, ns = parse_opf(z, opf_path)
                 first_zip_path, first_href = find_first_content_path(z, manifest, opf_dir, root, ns)
                 if first_zip_path is None:
-                    print(f"{epub_path.name}: skipped (no readable spine item)")
+                    print(f'{epub_path.name.removesuffix(".epub")}: skipped (no readable spine item)')
                     skip_count += 1
                     continue
                 basename = Path(first_href).name
@@ -131,21 +131,21 @@ def main(epub_folder):
                         pass
                 is_cover_like = has_large_image and text_len < 300
                 if has_dedicated:
-                    report = "yes (standard titlepage filename)"
+                    report = "yes, standard titlepage filename"
                     yes_count += 1
                 elif contains_title:
-                    report = "yes (contains book title in text)"
+                    report = "yes, contains book title in text"
                     yes_count += 1
                 elif is_cover_like:
-                    report = "no (likely cover wrapper with large image)"
+                    report = "no, likely cover wrapper with large image"
                     no_count += 1
                 else:
-                    report = "no (no clear titlepage indicators)"
+                    report = "no clear indicators"
                     no_count += 1
-                if report[0] == 'n' or print_yes:
-                    print(f"{epub_path.name}: {report} - first file: {basename}")
+                if not report[0] == 'y' or print_yes:
+                    print(f'{epub_path.name.removesuffix(".epub")[:30]:<30}: {report}, {basename[:40].removesuffix(".xhtml").removesuffix(".html")}')
         except Exception:
-            print(f"{epub_path.name}: skipped (failed to process)")
+            print(f'{epub_path.name.removesuffix(".epub")}: skipped (failed to process)')
             skip_count += 1
     print(f"\nProcessed {len(epub_paths)} files: {yes_count} have titlepage/equivalent as first, {no_count} do not, {skip_count} skipped")
 
