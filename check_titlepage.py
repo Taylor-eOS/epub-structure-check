@@ -3,6 +3,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from lxml import etree
 import last_folder_helper
+from get_covers import find_cover_path
 
 problems_only = False
 
@@ -22,6 +23,50 @@ def find_opf_path(z):
 
 def resolve_href(opf_dir, href):
     return (PurePosixPath(opf_dir) / PurePosixPath(href)).as_posix()
+
+def get_image_dimensions(z, image_path):
+    try:
+        with z.open(image_path) as f:
+            data = f.read()
+            if data[:2] == b'\xff\xd8':
+                return get_jpeg_dimensions(data)
+            elif data[:8] == b'\x89PNG\r\n\x1a\n':
+                return get_png_dimensions(data)
+    except Exception:
+        pass
+    return None, None
+
+def get_jpeg_dimensions(data):
+    try:
+        i = 2
+        while i < len(data):
+            if data[i] != 0xFF:
+                break
+            marker = data[i + 1]
+            if marker == 0xD8:
+                i += 2
+                continue
+            if marker == 0xD9:
+                break
+            if 0xC0 <= marker <= 0xCF and marker not in [0xC4, 0xC8, 0xCC]:
+                height = (data[i + 5] << 8) | data[i + 6]
+                width = (data[i + 7] << 8) | data[i + 8]
+                return width, height
+            length = (data[i + 2] << 8) | data[i + 3]
+            i += 2 + length
+    except Exception:
+        pass
+    return None, None
+
+def get_png_dimensions(data):
+    try:
+        if len(data) >= 24:
+            width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19]
+            height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23]
+            return width, height
+    except Exception:
+        pass
+    return None, None
 
 def parse_opf(z, opf_path):
     with z.open(opf_path) as f:
@@ -65,7 +110,7 @@ def find_first_content_path(z, manifest, opf_dir, root, ns):
                     return zip_path, href
     return None, None
 
-def analyze_content(z, first_zip_path, book_title):
+def analyze_content(z, first_zip_path, book_title, cover_width, cover_height):
     indicators = {
         'has_svg': False,
         'has_cover_class': False,
@@ -90,8 +135,11 @@ def analyze_content(z, first_zip_path, book_title):
         'css_text_align_center': False,
         'has_minimal_structure': False,
         'image_aspect_ratio_portrait': False,
-        'no_navigation_text': False
+        'no_navigation_text': False,
+        'svg_aspect_mismatch': False
     }
+    portrait_ratios_found = 0
+    landscape_ratios_found = 0
     try:
         with z.open(first_zip_path) as f:
             content_tree = etree.parse(f, etree.XMLParser(recover=True))
@@ -138,8 +186,17 @@ def analyze_content(z, first_zip_path, book_title):
                             vb_width = float(parts[2])
                             vb_height = float(parts[3])
                             if vb_height > vb_width:
-                                indicators['image_aspect_ratio_portrait'] = True
-                    except (ValueError, IndexError):
+                                portrait_ratios_found += 1
+                            elif vb_width > vb_height:
+                                landscape_ratios_found += 1
+                            if cover_width and cover_height:
+                                svg_ratio = vb_width / vb_height if vb_height > 0 else 0
+                                cover_ratio = cover_width / cover_height if cover_height > 0 else 0
+                                if svg_ratio > 0 and cover_ratio > 0:
+                                    ratio_diff = abs(svg_ratio - cover_ratio) / cover_ratio
+                                    if ratio_diff > 0.05:
+                                        indicators['svg_aspect_mismatch'] = True
+                    except (ValueError, IndexError, ZeroDivisionError):
                         pass
                 svg_images = svg_el.findall(f'.//{{{svg_ns}}}image')
                 if len(svg_images) == 1:
@@ -216,12 +273,16 @@ def analyze_content(z, first_zip_path, book_title):
                 height = el.get('height', '')
                 if width and height:
                     try:
-                        w_val = float(width)
-                        h_val = float(height)
+                        w_val = float(width.rstrip('px%'))
+                        h_val = float(height.rstrip('px%'))
                         if h_val > w_val:
-                            indicators['image_aspect_ratio_portrait'] = True
+                            portrait_ratios_found += 1
+                        elif w_val > h_val:
+                            landscape_ratios_found += 1
                     except (ValueError, TypeError):
                         pass
+            if portrait_ratios_found > landscape_ratios_found and portrait_ratios_found > 0:
+                indicators['image_aspect_ratio_portrait'] = True
     except Exception:
         pass
     return indicators
@@ -270,6 +331,8 @@ def classify_titlepage(basename_lower, indicators):
         reasons.append('minimal_structure')
     if indicators['no_navigation_text'] and indicators['text_length'] < 300:
         reasons.append('no_nav')
+    if indicators['svg_aspect_mismatch']:
+        reasons.append('svg_aspect_mismatch')
     return reasons
 
 def main(epub_folder):
@@ -297,7 +360,11 @@ def main(epub_folder):
                 lower_basename = basename.lower()
                 book_title = root.xpath('.//dc:title/text()', namespaces={'dc': 'http://purl.org/dc/elements/1.1/'})
                 book_title = book_title[0].strip() if book_title else ""
-                indicators = analyze_content(z, first_zip_path, book_title)
+                cover_zip_path, _ = find_cover_path(z, manifest, opf_dir, root, ns)
+                cover_width, cover_height = None, None
+                if cover_zip_path:
+                    cover_width, cover_height = get_image_dimensions(z, cover_zip_path)
+                indicators = analyze_content(z, first_zip_path, book_title, cover_width, cover_height)
                 reasons = classify_titlepage(lower_basename, indicators)
                 if problems_only and reasons:
                     continue
