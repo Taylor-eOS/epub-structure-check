@@ -2,26 +2,13 @@ from zipfile import ZipFile
 from pathlib import Path, PurePosixPath
 from lxml import etree
 import last_folder_helper
+from complex_scan import find_opf_path
 
 TABLE_TAGS = {'table', 'tbody', 'thead', 'tfoot', 'tr', 'td', 'th'}
 MIN_BLOCKS = 20
 MIN_EMPTY_RUNS = 5
 EMPTY_RUNS_RATIO_THRESHOLD = 0.25
 printKeyError = False
-
-def find_opf_path(z):
-    try:
-        with z.open('META-INF/container.xml') as f:
-            tree = etree.parse(f)
-            rootfile = tree.find('.//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile')
-            if rootfile is not None:
-                return rootfile.get('full-path')
-    except Exception as e:
-        print(f"Warning: Error reading container.xml: {e}")
-    for name in z.namelist():
-        if name.lower().endswith('.opf'):
-            return name
-    return None
 
 def parse_opf(z, opf_path):
     with z.open(opf_path) as f:
